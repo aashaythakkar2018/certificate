@@ -1,0 +1,212 @@
+import { Router } from 'express';
+import { z } from 'zod';
+import { requireAdminToken } from './adminAuth';
+import {
+  listCertificates,
+  getCertificateStats,
+  updateCertificateCustomerName,
+  getCertificateById,
+} from '../db/certificates';
+import {
+  issueCertificate,
+  regenerateCertificate,
+  DuplicateCertificateNumberError,
+} from '../certificates/issueCertificate';
+import { loadDesigns, findDesignForProductTitle } from '../config/designs';
+import { parseSku, checkSkuMatchesDesign, InvalidSkuError } from '../certificates/sku';
+import { logger } from '../utils/logger';
+
+export const dashboardApiRouter = Router();
+dashboardApiRouter.use(requireAdminToken);
+
+/** GET /admin/dashboard/api/meta - static info the dashboard shell needs on load. */
+dashboardApiRouter.get('/meta', (_req, res) => {
+  res.json({});
+});
+
+/** GET /admin/dashboard/api/designs - the "Issue certificate" form's design dropdown. */
+dashboardApiRouter.get('/designs', async (_req, res) => {
+  const config = loadDesigns();
+  const editionTotals: Record<string, number> = {};
+  for (const d of Object.values(config)) editionTotals[d.code] = d.editionTotal;
+  const stats = await getCertificateStats(editionTotals);
+  const issued = new Map(stats.byDesign.map((d) => [d.designCode, d]));
+
+  const designs = Object.entries(config).map(([name, d]) => {
+    const latestRecorded = (issued.get(d.code)?.nextSuggestedNumber ?? 1) - 1;
+    return {
+    name,
+    code: d.code,
+    skuCode: d.skuCode ?? null,
+    skuLineCode: d.skuLineCode ?? null,
+    collection: d.collection,
+    editionTotal: d.editionTotal,
+    nextSuggestedNumber: Math.max(d.lastKnownEditionNumber ?? 0, latestRecorded) + 1,
+  };
+  });
+  res.json({ designs });
+});
+
+/** GET /admin/dashboard/api/stats */
+dashboardApiRouter.get('/stats', async (_req, res) => {
+  const designs = loadDesigns();
+  const editionTotals: Record<string, number> = {};
+  for (const d of Object.values(designs)) editionTotals[d.code] = d.editionTotal;
+
+  const stats = await getCertificateStats(editionTotals);
+  res.json(stats);
+});
+
+const ListQuery = z.object({
+  status: z.string().optional(),
+  design: z.string().optional(), // design code
+  search: z.string().optional(),
+  page: z.coerce.number().min(1).default(1),
+  pageSize: z.coerce.number().min(1).max(200).default(25),
+});
+
+/** GET /admin/dashboard/api/certificates?status=&design=&search=&page=&pageSize= */
+dashboardApiRouter.get('/certificates', async (req, res) => {
+  const parsed = ListQuery.safeParse(req.query);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid query parameters', issues: parsed.error.issues });
+  }
+  const { status, design, search, page, pageSize } = parsed.data;
+  const result = await listCertificates({
+    status: status as any,
+    designCode: design,
+    search,
+    page,
+    pageSize,
+  });
+  res.json({ rows: result.rows, total: result.total, page, pageSize });
+});
+
+const IssueCertificateBody = z.object({
+  orderNumber: z.string().trim().min(1, 'Order number is required'),
+  customerFirstName: z.string().trim().min(1, 'First name is required'),
+  customerLastName: z.string().trim().optional().default(''),
+  customerEmail: z.string().trim().email('A valid customer email is required'),
+  designName: z.string().trim().min(1, 'Design is required'),
+  sku: z.string().trim().min(1, 'SKU is required'),
+});
+
+/**
+ * POST /admin/dashboard/api/certificates
+ * Issues a brand-new certificate: validates the design exists, reads the
+ * edition number from the piece's SKU (never generated here), checks
+ * neither the SKU nor that edition is already certified, generates the
+ * PDF, and stores it. Does NOT send anything - you download the PDF from
+ * the response (or the dashboard table) and send it yourself.
+ */
+dashboardApiRouter.post('/certificates', async (req, res) => {
+  const parsed = IssueCertificateBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid body', issues: parsed.error.issues });
+  }
+  const input = parsed.data;
+
+  const design = findDesignForProductTitle(input.designName);
+  if (!design) {
+    return res.status(400).json({
+      error: `"${input.designName}" is not a design configured in config/designs.json.`,
+    });
+  }
+
+  let parsedSku;
+  try {
+    parsedSku = parseSku(input.sku);
+    checkSkuMatchesDesign(parsedSku, input.designName, design);
+  } catch (err) {
+    if (err instanceof InvalidSkuError) return res.status(400).json({ error: err.message });
+    throw err;
+  }
+
+  try {
+    const cert = await issueCertificate({
+      orderNumber: input.orderNumber,
+      customerFirstName: input.customerFirstName,
+      customerLastName: input.customerLastName || null,
+      customerEmail: input.customerEmail,
+      designName: input.designName,
+      designCode: design.code,
+      certificateNumber: parsedSku.editionNumber,
+      editionTotal: parsedSku.editionTotal,
+      sku: parsedSku.sku,
+    });
+
+    if (cert.status === 'failed') {
+      // Row was created (so the number is now reserved), but PDF
+      // generation failed - surface that clearly rather than pretending
+      // success.
+      return res.status(207).json({ ok: false, job: cert, error: cert.error_message });
+    }
+    res.status(201).json({ ok: true, job: cert });
+  } catch (err) {
+    if (err instanceof DuplicateCertificateNumberError) {
+      return res.status(409).json({ error: err.message });
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('Dashboard: issue certificate failed', { error: message });
+    res.status(500).json({ error: message });
+  }
+});
+
+const UpdateNameBody = z.object({
+  customerFirstName: z.string().trim().min(1).max(200),
+  customerLastName: z.string().trim().max(200).optional().default(''),
+});
+
+/**
+ * PATCH /admin/dashboard/api/certificates/:id
+ * Corrects the customer name only. Does not regenerate the PDF by itself -
+ * call POST .../regenerate afterwards to get a corrected PDF.
+ */
+dashboardApiRouter.patch('/certificates/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  const parsed = UpdateNameBody.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: 'Invalid body', issues: parsed.error.issues });
+  }
+
+  const updated = await updateCertificateCustomerName(
+    id,
+    parsed.data.customerFirstName,
+    parsed.data.customerLastName || null
+  );
+  if (!updated) return res.status(404).json({ error: 'Certificate not found' });
+
+  logger.info('Dashboard: customer name corrected', { certificateId: id });
+  res.json({ job: updated });
+});
+
+/**
+ * POST /admin/dashboard/api/certificates/:id/regenerate
+ * Re-renders the PDF from this row's current data (so a name correction
+ * takes effect, or to retry one that failed) and re-stores it. Does not
+ * send anything.
+ */
+dashboardApiRouter.post('/certificates/:id/regenerate', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+
+  try {
+    const cert = await regenerateCertificate(id);
+    res.json({ ok: true, job: cert });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('Dashboard: regenerate failed', { certificateId: id, error: message });
+    res.status(422).json({ ok: false, error: message });
+  }
+});
+
+/** GET /admin/dashboard/api/certificates/:id - single certificate detail. */
+dashboardApiRouter.get('/certificates/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ error: 'Invalid id' });
+  const cert = await getCertificateById(id);
+  if (!cert) return res.status(404).json({ error: 'Not found' });
+  res.json({ job: cert });
+});
