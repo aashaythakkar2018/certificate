@@ -14,6 +14,7 @@ import {
 } from '../certificates/issueCertificate';
 import { loadDesigns, findDesignForProductTitle } from '../config/designs';
 import { parseSku, checkSkuMatchesDesign, InvalidSkuError } from '../certificates/sku';
+import { getCertificateStorage } from '../services/storage';
 import { logger } from '../utils/logger';
 
 export const dashboardApiRouter = Router();
@@ -79,7 +80,18 @@ dashboardApiRouter.get('/certificates', async (req, res) => {
     page,
     pageSize,
   });
-  res.json({ rows: result.rows, total: result.total, page, pageSize });
+  // Re-sign each PDF link on every listing: the URL saved at generation time
+  // expires (CERTIFICATE_STORAGE_SIGNED_URL_TTL_SECONDS), which would make
+  // "Preview PDF" on older certificates show "Invalid or expired link".
+  const storage = getCertificateStorage();
+  const rows = await Promise.all(
+    result.rows.map(async (row) =>
+      row.storage_key
+        ? { ...row, certificate_url: await storage.getCertificateUrl(row.storage_key) }
+        : row
+    )
+  );
+  res.json({ rows, total: result.total, page, pageSize });
 });
 
 const IssueCertificateBody = z.object({
