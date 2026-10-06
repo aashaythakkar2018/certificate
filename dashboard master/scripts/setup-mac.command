@@ -96,6 +96,10 @@ CERTIFICATE_TEST_MODE=true
 TEST_EMAIL=
 
 ADMIN_API_TOKEN=$ADMIN_TOKEN
+
+# Google Sheet copy of every certificate (optional) - README section 13.
+GOOGLE_SHEETS_WEBHOOK_URL=
+GOOGLE_SHEETS_SECRET=
 EOF
   echo "✓ .env created"
   echo ""

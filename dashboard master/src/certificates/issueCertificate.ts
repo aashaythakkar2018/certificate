@@ -7,6 +7,7 @@ import {
   DuplicateCertificateNumberError,
 } from '../db/certificates';
 import { generateAndStoreCertificate } from '../services/certificate/generateCertificate';
+import { syncCertificateToSheet } from '../services/sheets/googleSheet';
 import { withRetry } from '../utils/retry';
 import { logger } from '../utils/logger';
 
@@ -65,7 +66,9 @@ export async function issueCertificate(input: IssueCertificateInput): Promise<Ce
     logger.error('Certificate issuance failed', { certificateId: cert.id, error: message });
   }
 
-  return (await getCertificateById(cert.id))!;
+  const issued = (await getCertificateById(cert.id))!;
+  syncCertificateToSheet(issued);
+  return issued;
 }
 
 /**
@@ -84,6 +87,7 @@ export async function regenerateCertificate(id: number): Promise<Certificate> {
   if (!refreshed) throw new Error('Certificate disappeared during regeneration');
 
   logger.info('Certificate regenerated', { certificateId: refreshed.id });
+  syncCertificateToSheet(refreshed);
 
   return refreshed;
 }

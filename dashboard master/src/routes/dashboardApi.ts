@@ -6,6 +6,7 @@ import {
   getCertificateStats,
   updateCertificateCustomerName,
   getCertificateById,
+  listAllCertificates,
 } from '../db/certificates';
 import {
   issueCertificate,
@@ -15,6 +16,12 @@ import {
 import { loadDesigns, findDesignForProductTitle } from '../config/designs';
 import { parseSku, checkSkuMatchesDesign, InvalidSkuError } from '../certificates/sku';
 import { getCertificateStorage } from '../services/storage';
+import {
+  isSheetSyncConfigured,
+  certificateToSheetRow,
+  pushRowsToSheet,
+  syncCertificateToSheet,
+} from '../services/sheets/googleSheet';
 import { logger } from '../utils/logger';
 
 export const dashboardApiRouter = Router();
@@ -22,7 +29,28 @@ dashboardApiRouter.use(requireAdminToken);
 
 /** GET /admin/dashboard/api/meta - static info the dashboard shell needs on load. */
 dashboardApiRouter.get('/meta', (_req, res) => {
-  res.json({});
+  res.json({ sheetsConfigured: isSheetSyncConfigured() });
+});
+
+/**
+ * POST /admin/dashboard/api/sheets/sync
+ * Re-sends every certificate to the Google Sheet - fills it the first time,
+ * and catches up on any update that failed to sync (e.g. while offline).
+ */
+dashboardApiRouter.post('/sheets/sync', async (_req, res) => {
+  if (!isSheetSyncConfigured()) {
+    return res.status(400).json({ error: 'Google Sheet is not set up - see README section 13.' });
+  }
+  try {
+    const certs = await listAllCertificates();
+    const { written } = await pushRowsToSheet(certs.map(certificateToSheetRow));
+    logger.info('Dashboard: Google Sheet re-synced', { rows: written });
+    res.json({ ok: true, written });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('Dashboard: Google Sheet sync failed', { error: message });
+    res.status(502).json({ error: message });
+  }
 });
 
 /** GET /admin/dashboard/api/designs - the "Issue certificate" form's design dropdown. */
@@ -191,6 +219,7 @@ dashboardApiRouter.patch('/certificates/:id', async (req, res) => {
   if (!updated) return res.status(404).json({ error: 'Certificate not found' });
 
   logger.info('Dashboard: customer name corrected', { certificateId: id });
+  syncCertificateToSheet(updated);
   res.json({ job: updated });
 });
 

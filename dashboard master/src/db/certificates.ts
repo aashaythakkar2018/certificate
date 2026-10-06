@@ -192,6 +192,12 @@ export async function listCertificates(
   return { rows: rowsRes.rows, total };
 }
 
+/** Every certificate, oldest first - used to re-sync the whole Google Sheet. */
+export async function listAllCertificates(): Promise<Certificate[]> {
+  const res = await pool.query<Certificate>(`SELECT * FROM certificates ORDER BY created_at ASC`);
+  return res.rows;
+}
+
 export interface CertificateStats {
   totalCertificates: number;
   byStatus: Record<string, number>;

@@ -204,6 +204,30 @@
     badge.className = 'badge';
   }
 
+  // -------------------------------------------------------- google sheet --
+  var sheetSyncBtn = document.getElementById('sheetSyncBtn');
+  async function loadMeta() {
+    try {
+      var r = await api('/meta');
+      sheetSyncBtn.classList.toggle('hidden', !r.json.sheetsConfigured);
+    } catch (err) {
+      // Not fatal - the dashboard works without the Sheet button.
+    }
+  }
+  sheetSyncBtn.addEventListener('click', async function () {
+    sheetSyncBtn.disabled = true;
+    sheetSyncBtn.textContent = 'Syncing…';
+    try {
+      var r = await api('/sheets/sync', { method: 'POST' });
+      toast('Google Sheet updated — ' + r.json.written + ' certificate(s) synced.');
+    } catch (err) {
+      toast('Google Sheet sync failed: ' + err.message, true);
+    } finally {
+      sheetSyncBtn.disabled = false;
+      sheetSyncBtn.textContent = 'Sync to Google Sheet';
+    }
+  });
+
   // -------------------------------------------------------- certificates --
   function statusLabel(status) {
     return status.replace(/_/g, ' ');
@@ -448,6 +472,7 @@
   // ------------------------------------------------------------- boot ---
   function boot() {
     showModeBadge();
+    loadMeta();
     refreshAll();
     startAutoRefresh();
   }

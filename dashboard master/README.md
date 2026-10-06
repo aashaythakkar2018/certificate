@@ -345,6 +345,8 @@ it's already done, so re-running `setup-mac.command` after an interruption
 | "… is not a Rhytara SKU" / "should be zero-padded" | Type the SKU exactly as on the piece, e.g. `RHY-EOE-GRS-001/250`. |
 | "SKU … belongs to X, not Y" | The design picked on the form doesn't match the SKU's design code. |
 | Dashboard shows "Unauthorized" | Wrong `x-admin-token` — check for typos when copying `ADMIN_API_TOKEN` out of `.env`. |
+| "Google Sheet sync failed: Wrong secret" | `GOOGLE_SHEETS_SECRET` in `.env` doesn't match `SECRET` in the Sheet's Apps Script. |
+| "Google Sheet returned HTTP … and not JSON" | The web app URL is wrong, or it wasn't deployed with access **Anyone** (section 13, step 4). |
 | Dashboard won't load at all | Is the local Postgres running (`pg_ctl ... status`)? Is `npm run dev` still running in a terminal? |
 
 ---
@@ -354,3 +356,54 @@ it's already done, so re-running `setup-mac.command` after an interruption
 - **Rashmi's signature** — see section 7. The signature line prints blank
   until `assets/signature/rashmi-rao-signature.png` is added.
 - **SKU codes for Grounding Nature and Magical Pansies** — see section 8.
+
+---
+
+## 13. Google Sheet copy of every certificate
+
+The dashboard can keep a Google Sheet up to date with every certificate —
+one row each: certificate ID, date issued, order number, customer name and
+email, design, SKU, edition, status, last updated. A new certificate adds a
+row; correcting a name or regenerating updates that same row. The Sheet is
+a copy for the team to view — the dashboard's database stays the real
+record, so if Google is unreachable the certificate is still issued
+normally (and the failure is logged in the Terminal).
+
+It works through a small script that lives inside the Sheet (Google Apps
+Script), so there is no Google Cloud project or key file to set up.
+
+**One-time setup (about 5 minutes):**
+
+1. Create a Google Sheet (or open the one you want to use). Click
+   **Extensions → Apps Script**.
+2. Delete the code in the editor and paste in the whole of
+   [`google-sheets/Code.gs`](google-sheets/Code.gs).
+3. Make a secret: in Terminal run `openssl rand -hex 32` (or type any long
+   random string). In the script, replace
+   `paste-the-GOOGLE_SHEETS_SECRET-value-here` with it. Click **Save**.
+4. Click **Deploy → New deployment**, click the gear → **Web app**. Set
+   **Execute as: Me** and **Who has access: Anyone**, then **Deploy**.
+   Google asks you to authorize it — choose your account, then
+   **Advanced → Go to (project name) → Allow**. Copy the **Web app URL**
+   (it ends in `/exec`).
+5. Open the dashboard's `.env` in TextEdit and fill in:
+   ```
+   GOOGLE_SHEETS_WEBHOOK_URL=https://script.google.com/macros/s/…/exec
+   GOOGLE_SHEETS_SECRET=the same secret as in step 3
+   ```
+6. Restart the dashboard (close the Terminal window, double-click
+   `start.command`). A **Sync to Google Sheet** button now appears at the
+   top — click it once to copy in every certificate issued so far. It
+   creates a `Certificates` tab with headings.
+
+From then on new certificates appear in the Sheet within a few seconds.
+Click **Sync to Google Sheet** again any time to catch up (for example
+after the Mac was offline) — it's safe to repeat, rows are updated, never
+duplicated.
+
+"Anyone" access only means the URL accepts requests — it can't be used to
+read the Sheet, and anything without the secret is rejected. Keep the URL
+and secret private. If you edit `Code.gs` later, use **Deploy → Manage
+deployments → Edit → New version** so the URL stays the same.
+
+To turn it off, empty `GOOGLE_SHEETS_WEBHOOK_URL` in `.env` and restart.

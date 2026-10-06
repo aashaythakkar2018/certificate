@@ -42,6 +42,11 @@ const EnvSchema = z.object({
     .transform((v) => v.toLowerCase() === 'true'),
   TEST_EMAIL: z.string().optional(),
   ADMIN_API_TOKEN: z.string().optional(),
+
+  // Optional Google Sheet mirror (README section 13): the Apps Script web
+  // app URL, and the shared secret also set as SECRET in google-sheets/Code.gs.
+  GOOGLE_SHEETS_WEBHOOK_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
+  GOOGLE_SHEETS_SECRET: z.string().optional(),
 });
 
 function loadEnv() {
