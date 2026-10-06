@@ -82,8 +82,10 @@ service). It shows:
   whose design code is known (EOE, PPR, SGL) selects the design for you.
 - **Search/filter** by customer name, email, order number, design, SKU, or
   status.
-- **Download the PDF** — every row with a generated certificate has a
-  Download PDF link.
+- **Preview or download the PDF** — every row with a generated certificate
+  has a *Preview PDF* link, which opens it in a new browser tab (Chrome's
+  built-in PDF viewer), and a *Download* link that saves it straight to
+  the Downloads folder.
 - **Fix a wrong name** — click *Edit name*, correct it, *Save*, then
   *Regenerate PDF* to get a corrected certificate reflecting the fix.
 - **Retry a failed one** — if PDF generation failed (a transient
@@ -322,7 +324,7 @@ script's name, then confirm. This is needed once per script.
 
 **Where certificates are saved.** Every PDF is stored on her Mac inside
 the `dashboard master` folder, in `local-storage/certificates/<design code>/`, and
-stays listed on the dashboard. Clicking *Download PDF* on the dashboard
+stays listed on the dashboard. Clicking *Download* on the dashboard
 also saves a copy to her Downloads folder, ready to attach to an email.
 Back up the `dashboard master` folder (or at least `local-storage/`) along with her
 other files — it is the only copy of the issued certificates. The list of
